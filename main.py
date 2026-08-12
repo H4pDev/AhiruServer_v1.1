@@ -5,7 +5,7 @@ AhiruServer - Minecraft LAN共有GUIアプリケーション
 使い方:
   1. pip install -r requirements.txt
   2. python main.py
-  3. MinecraftでLANに公開 → 表示されたポート番号を入力 → 「公開開始」を押す
+  3. MinecraftでLANに公開 → 表示されたポート番号を入力 → 「起動」を押す
   4. 表示されたアドレスを友人に共有する
 
 プロトコル:
@@ -78,36 +78,36 @@ E4MC_ALPN = "quiclime"
 LOCAL_HOST = "127.0.0.1"
 
 # ステータス定義
-STATUS_DISCONNECTED = "未接続"
+STATUS_DISCONNECTED = "停止中"
 STATUS_CONNECTING = "接続中..."
 STATUS_ONLINE = "公開中（オンライン）"
 STATUS_ERROR = "エラー"
 
 # ステータスに対応する色 (状況に応じて直感的なカラーを表示)
 STATUS_COLORS = {
-    STATUS_DISCONNECTED: "#888888",  # グレー (未接続)
+    STATUS_DISCONNECTED: "#888888",  # グレー (停止中)
     STATUS_CONNECTING: "#F39C12",    # アンバー/オレンジ (接続中)
     STATUS_ONLINE: "#2ECC71",        # エメラルドグリーン (公開中/オンライン)
     STATUS_ERROR: "#E74C3C",         # レッド (エラー)
 }
 
-# GUIカラーパレット (Monochrome Simple Design)
-COLOR_BG_CANVAS = "#121212"        # メイン背景 (ダーク)
-COLOR_BG_PANEL = "#1e1e1e"         # パネル背景
-COLOR_BG_HERO = "#1e1e1e"          # ヘッダー背景
-COLOR_BG_SURFACE = "#242424"       # カード/入力枠背景
-COLOR_BG_CARBON = "#181818"        # ログ表示部背景
-COLOR_ACCENT_SIGNAL = "#ffffff"    # シグナル (白)
-COLOR_ACCENT_AMBER = "#cccccc"     # アンバー相当 (ライトグレー)
-COLOR_ACCENT_PRIMARY = "#ffffff"   # プライマリアクセント (純白)
-COLOR_ACCENT_PRIMARY_HOVER = "#dddddd" # プライマリアクセントホバー
-COLOR_ACCENT_RED = "#333333"       # 停止ボタン (ダークグレー)
-COLOR_BORDER = "#333333"           # 枠線
-COLOR_TEXT_INK = "#ffffff"         # タイトル/インクテキスト
-COLOR_TEXT_SOFT = "#aaaaaa"        # サブタイトルテキスト
-COLOR_TEXT_BODY = "#cccccc"        # 本文テキスト
-COLOR_TEXT_MUTED = "#777777"       # 補足テキスト
-COLOR_TEXT_ON_DARK = "#ffffff"     # 暗色背景上のテキスト
+# GUIカラーパレット (Duck Theme Design)
+COLOR_BG_CANVAS = "#13161c"        # メイン背景 (アヒルダーク)
+COLOR_BG_PANEL = "#1c202b"         # パネル背景
+COLOR_BG_HERO = "#1c202b"          # ヘッダー背景
+COLOR_BG_SURFACE = "#232836"       # カード/入力枠背景
+COLOR_BG_CARBON = "#0d0f14"        # ログ表示部背景
+COLOR_ACCENT_SIGNAL = "#F59E0B"    # シグナル (ダックイエロー)
+COLOR_ACCENT_AMBER = "#F59E0B"     # アンバー
+COLOR_ACCENT_PRIMARY = "#F59E0B"   # プライマリアクセント (アヒルイエロー)
+COLOR_ACCENT_PRIMARY_HOVER = "#D97706" # プライマリアクセントホバー
+COLOR_ACCENT_RED = "#DC2626"       # 停止ボタン (アヒルレッド)
+COLOR_BORDER = "#2d3446"           # 枠線
+COLOR_TEXT_INK = "#FBBF24"         # タイトル/インクテキスト (アヒルゴールド)
+COLOR_TEXT_SOFT = "#9CA3AF"        # サブタイトルテキスト
+COLOR_TEXT_BODY = "#E5E7EB"        # 本文テキスト
+COLOR_TEXT_MUTED = "#6B7280"       # 補足テキスト
+COLOR_TEXT_ON_DARK = "#F9FAFB"     # 暗色背景上のテキスト
 
 # UIフォント設定
 FONT_FAMILY = "Meiryo"
@@ -630,7 +630,7 @@ class App(ctk.CTk):
 
         title_label = ctk.CTkLabel(
             text_box,
-            text="AhiruServer",
+            text="🐥 AhiruServer",
             font=ctk.CTkFont(family=FONT_FAMILY, size=32, weight="bold"),
             text_color=COLOR_TEXT_INK,
         )
@@ -638,7 +638,7 @@ class App(ctk.CTk):
 
         subtitle_label = ctk.CTkLabel(
             text_box,
-            text="Minecraft LAN共有 — ポート開放不要",
+            text="Minecraft LAN共有 — 🦆 Duck Speed Tunnel",
             font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
             text_color=COLOR_TEXT_SOFT,
         )
@@ -680,7 +680,7 @@ class App(ctk.CTk):
         # ============================
         self._toggle_btn = ctk.CTkButton(
             self,
-            text="公開開始",
+            text="起動",
             font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
             height=48,
             corner_radius=6,
@@ -791,7 +791,7 @@ class App(ctk.CTk):
     # =========================================================================
 
     def _toggle_connection(self):
-        """公開開始/停止のトグル処理"""
+        """起動/停止のトグル処理"""
         if self._is_connected:
             self._stop_tunnel()
         else:
@@ -841,23 +841,37 @@ class App(ctk.CTk):
         """トンネルを停止する"""
         self._append_log("トンネルを停止しています...")
 
-        if self._tunnel:
-            self._tunnel.stop()
-            self._tunnel = None
-
-        self._is_connected = False
-        self._assigned_domain = None
-        self._toggle_btn.configure(
-            text="公開開始",
-            fg_color=COLOR_ACCENT_PRIMARY,
-            hover_color=COLOR_ACCENT_PRIMARY_HOVER,
-            text_color="#121212",
-        )
-        self._port_entry.configure(state="normal")
-        self._domain_label.configure(text="---", text_color=COLOR_ACCENT_PRIMARY)
-        self._copy_btn.configure(state="disabled")
+        # UIを即座に '停止中' の表示に切り替え & 画面を強制再描画
+        self._toggle_btn.configure(text="停止中", state="disabled")
+        self._domain_label.configure(text="停止中...")
         self._update_status(STATUS_DISCONNECTED, STATUS_COLORS[STATUS_DISCONNECTED])
-        self._append_log("トンネルを停止しました")
+        self.update_idletasks()
+
+        def do_stop():
+            if self._tunnel:
+                self._tunnel.stop()
+                self._tunnel = None
+
+            self._is_connected = False
+            self._assigned_domain = None
+
+            def finish_stop():
+                self._toggle_btn.configure(
+                    text="起動",
+                    fg_color=COLOR_ACCENT_PRIMARY,
+                    hover_color=COLOR_ACCENT_PRIMARY_HOVER,
+                    text_color="#121212",
+                    state="normal",
+                )
+                self._port_entry.configure(state="normal")
+                self._domain_label.configure(text="---", text_color=COLOR_ACCENT_PRIMARY)
+                self._copy_btn.configure(state="disabled")
+                self._update_status(STATUS_DISCONNECTED, STATUS_COLORS[STATUS_DISCONNECTED])
+                self._append_log("トンネルを停止しました")
+
+            self.after(500, finish_stop)
+
+        threading.Thread(target=do_stop, daemon=True).start()
 
     def _copy_domain(self):
         """ドメインをクリップボードにコピーする"""
@@ -903,7 +917,7 @@ class App(ctk.CTk):
             if status == STATUS_ERROR:
                 self._is_connected = False
                 self._toggle_btn.configure(
-                    text="公開開始",
+                    text="起動",
                     fg_color=COLOR_ACCENT_PRIMARY,
                     hover_color=COLOR_ACCENT_PRIMARY_HOVER,
                     text_color="#121212",

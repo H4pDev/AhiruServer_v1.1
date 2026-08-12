@@ -112,22 +112,22 @@ class InstallerApp:
 
     def setup_ui(self):
         # 1. ヘッダーフレーム (上部固定)
-        header_frame = tk.Frame(self.root, bg="#1E1E1E", height=65)
+        header_frame = tk.Frame(self.root, bg="#1C202B", height=65)
         header_frame.pack(fill="x", side="top")
         header_frame.pack_propagate(False)
 
-        title_container = tk.Frame(header_frame, bg="#1E1E1E", padx=20)
+        title_container = tk.Frame(header_frame, bg="#1C202B", padx=20)
         title_container.pack(fill="both", expand=True)
 
         title_yellow = tk.Label(
-            title_container, text="AhiruServer",
-            font=self.font_title, fg="white", bg="#1E1E1E", anchor="w"
+            title_container, text="🐥 AhiruServer",
+            font=self.font_title, fg="#FBBF24", bg="#1C202B", anchor="w"
         )
         title_yellow.pack(side="left")
 
         title_sub = tk.Label(
             title_container, text=" セットアップ",
-            font=self.font_title, fg="white", bg="#1E1E1E", anchor="w"
+            font=self.font_title, fg="#E5E7EB", bg="#1C202B", anchor="w"
         )
         title_sub.pack(side="left")
 
@@ -141,10 +141,10 @@ class InstallerApp:
         )
         self.cancel_btn.pack(side="right", padx=(8, 0))
 
-        # 目立つ緑色のインストールボタン
+        # 目立つアヒルイエローのインストールボタン
         self.install_btn = tk.Button(
             self.btn_frame, text=" インストール ", font=("Meiryo UI", 10, "bold"),
-            bg="#27AE60", fg="white", activebackground="#219150", activeforeground="white",
+            bg="#F59E0B", fg="#121212", activebackground="#D97706", activeforeground="#121212",
             relief="raised", bd=2, padx=16, pady=4, command=self.start_installation
         )
         self.install_btn.pack(side="right")
