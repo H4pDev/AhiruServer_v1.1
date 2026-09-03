@@ -1,17 +1,18 @@
 """
-AhiruServer - Minecraft LAN共有GUIアプリケーション
+AhiruServer - Minecraft LAN共有 Webアプリケーション
 ポート開放なしでMinecraftのLAN公開ワールドを外部共有するためのe4mc互換クライアント。
 
 使い方:
   1. pip install -r requirements.txt
   2. python main.py
-  3. MinecraftでLANに公開 → 表示されたポート番号を入力 → 「起動」を押す
-  4. 表示されたアドレスを友人に共有する
+  3. 自動的にブラウザで http://127.0.0.1:8000 が開きます
+  4. MinecraftでLANに公開 → 表示されたポート番号を入力 → 「起動」を押す
+  5. 表示されたアドレスを友人に共有する
 
 プロトコル:
   e4mc (Dialtone/QUIC) プロトコルを使用。
   1. ブローカーAPI (https://broker.e4mc.link/getBestRelay) で最適リレーを取得
-  2. QUICでリレーサーバーに接続 (ALPN: "e4mc-dialtone")
+  2. QUICでリレーサーバーに接続 (ALPN: "quiclime")
   3. 制御ストリームでJSON制御メッセージを交換
   4. 各プレイヤー接続は新しいQUICストリームとして確立
 """
@@ -25,10 +26,27 @@ import os
 import sys
 import threading
 import urllib.request
-from typing import Optional, Callable
+import webbrowser
+from typing import Optional, Callable, List, Dict, Any
 
-import customtkinter as ctk
-from PIL import Image
+# Windows標準出力での絵文字エラー防止
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
 
 def resource_path(relative_path: str) -> str:
     """ PyInstaller実行環境および通常環境に対応するリソース絶対パスを返却 """
@@ -90,30 +108,6 @@ STATUS_COLORS = {
     STATUS_ONLINE: "#2ECC71",        # エメラルドグリーン (公開中/オンライン)
     STATUS_ERROR: "#E74C3C",         # レッド (エラー)
 }
-
-# GUIカラーパレット (Duck Theme Design)
-COLOR_BG_CANVAS = "#13161c"        # メイン背景 (アヒルダーク)
-COLOR_BG_PANEL = "#1c202b"         # パネル背景
-COLOR_BG_HERO = "#1c202b"          # ヘッダー背景
-COLOR_BG_SURFACE = "#232836"       # カード/入力枠背景
-COLOR_BG_CARBON = "#0d0f14"        # ログ表示部背景
-COLOR_ACCENT_SIGNAL = "#F59E0B"    # シグナル (ダックイエロー)
-COLOR_ACCENT_AMBER = "#F59E0B"     # アンバー
-COLOR_ACCENT_PRIMARY = "#F59E0B"   # プライマリアクセント (アヒルイエロー)
-COLOR_ACCENT_PRIMARY_HOVER = "#D97706" # プライマリアクセントホバー
-COLOR_ACCENT_RED = "#DC2626"       # 停止ボタン (アヒルレッド)
-COLOR_BORDER = "#2d3446"           # 枠線
-COLOR_TEXT_INK = "#FBBF24"         # タイトル/インクテキスト (アヒルゴールド)
-COLOR_TEXT_SOFT = "#9CA3AF"        # サブタイトルテキスト
-COLOR_TEXT_BODY = "#E5E7EB"        # 本文テキスト
-COLOR_TEXT_MUTED = "#6B7280"       # 補足テキスト
-COLOR_TEXT_ON_DARK = "#F9FAFB"     # 暗色背景上のテキスト
-
-# UIフォント設定
-FONT_FAMILY = "Meiryo"
-FONT_TITLE = "Meiryo"
-FONT_NUMBER = "Meiryo"
-
 
 # =============================================================================
 # E4mcProtocol - QUIC通信プロトコルハンドラ
@@ -503,7 +497,7 @@ class E4mcTunnel:
             is_client=True,
             alpn_protocols=[E4MC_ALPN],
         )
-        # 自己署名証明書を許可（e4mcリレーサーバーは独自証明書の場合がある）
+        # 自己署名証明書を許可
         configuration.verify_mode = ssl.CERT_NONE
 
         self._emit_log("QUICトンネルを確立中...")
@@ -571,396 +565,291 @@ class E4mcTunnel:
 
 
 # =============================================================================
-# App - CustomTkinter GUIアプリケーション
+# WebAppState & WebSocket Manager
 # =============================================================================
 
-class App(ctk.CTk):
+class WebAppManager:
     """
-    AhiruServer のメインGUIウィンドウ。
-    CustomTkinterを使用したモダンなダークテーマUI。
+    Webアプリケーション用の状態管理およびWebSocketブロードキャスター。
     """
-
     def __init__(self):
-        super().__init__()
+        self.active_connections: List[WebSocket] = []
+        self.tunnel: Optional[E4mcTunnel] = None
+        self.is_connected = False
+        self.status = STATUS_DISCONNECTED
+        self.status_color = STATUS_COLORS[STATUS_DISCONNECTED]
+        self.domain: Optional[str] = None
+        self.current_port: Optional[int] = None
+        self.logs: List[str] = []
 
-        # ウィンドウ基本設定
-        self.title("AhiruServer - Minecraft LAN共有")
-        self.geometry("520x720")
-        self.minsize(480, 650)
-        self.resizable(True, True)
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        # 初期状態の送信
+        await websocket.send_json({
+            "type": "init",
+            "payload": {
+                "is_connected": self.is_connected,
+                "status": self.status,
+                "color": self.status_color,
+                "domain": self.domain,
+                "port": self.current_port,
+                "logs": self.logs
+            }
+        })
 
-        # ダークモード強制
-        ctk.set_appearance_mode("dark")
-        ctk.set_default_color_theme("blue")
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
-        # ウィンドウの背景色
-        self.configure(fg_color=COLOR_BG_CANVAS)
-
-        # トンネルエンジン
-        self._tunnel: Optional[E4mcTunnel] = None
-        self._is_connected = False
-        self._assigned_domain: Optional[str] = None
-
-        # UIを構築
-        self._build_ui()
-
-        # ウィンドウ閉じ時のクリーンアップ
-        self.protocol("WM_DELETE_WINDOW", self._on_closing)
-        atexit.register(self._force_cleanup)
-
-    def _build_ui(self):
-        """GUIコンポーネントを構築する"""
-
-        # ============================
-        # ヘッダー (Hero Panel)
-        # ============================
-        header_frame = ctk.CTkFrame(
-            self, fg_color=COLOR_BG_HERO, corner_radius=0,
-            border_width=0
-        )
-        header_frame.pack(fill="x", padx=24, pady=(24, 16))
-
-        # アイコンとタイトルを配置する水平コンテナ
-        title_box = ctk.CTkFrame(header_frame, fg_color="transparent")
-        title_box.pack(anchor="w", fill="x")
-
-        # タイトルテキスト表示
-        text_box = ctk.CTkFrame(title_box, fg_color="transparent")
-        text_box.pack(side="left", fill="both", expand=True)
-
-        title_label = ctk.CTkLabel(
-            text_box,
-            text="🐥 AhiruServer",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=32, weight="bold"),
-            text_color=COLOR_TEXT_INK,
-        )
-        title_label.pack(anchor="w", pady=(0, 2))
-
-        subtitle_label = ctk.CTkLabel(
-            text_box,
-            text="Minecraft LAN共有 — 🦆 Duck Speed Tunnel",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            text_color=COLOR_TEXT_SOFT,
-        )
-        subtitle_label.pack(anchor="w", pady=(0, 0))
-
-        # ============================
-        # ポート入力エリア (Form Panel)
-        # ============================
-        port_frame = ctk.CTkFrame(
-            self, fg_color=COLOR_BG_CANVAS, corner_radius=0,
-            border_width=0
-        )
-        port_frame.pack(fill="x", padx=24, pady=8)
-
-        port_label = ctk.CTkLabel(
-            port_frame,
-            text="LANポート番号",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
-            text_color=COLOR_TEXT_ON_DARK,
-        )
-        port_label.pack(anchor="w", pady=(0, 8))
-
-        self._port_entry = ctk.CTkEntry(
-            port_frame,
-            placeholder_text="例: 55432",
-            font=ctk.CTkFont(family=FONT_NUMBER, size=16, weight="bold"),
-            height=48,
-            fg_color=COLOR_BG_SURFACE,
-            border_color=COLOR_BORDER,
-            border_width=1,
-            text_color=COLOR_TEXT_INK,
-            placeholder_text_color="#888888",
-            corner_radius=8,
-        )
-        self._port_entry.pack(fill="x")
-
-        # ============================
-        # 公開ボタン (Button Submit)
-        # ============================
-        self._toggle_btn = ctk.CTkButton(
-            self,
-            text="起動",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
-            height=48,
-            corner_radius=6,
-            fg_color=COLOR_ACCENT_PRIMARY,
-            hover_color=COLOR_ACCENT_PRIMARY_HOVER,
-            text_color="#121212",
-            command=self._toggle_connection,
-            border_width=0,
-        )
-        self._toggle_btn.pack(fill="x", padx=24, pady=16)
-
-        # ============================
-        # 共有アドレス表示エリア (Info Box)
-        # ============================
-        addr_frame = ctk.CTkFrame(
-            self, fg_color=COLOR_BG_SURFACE, corner_radius=12,
-            border_width=1, border_color=COLOR_BORDER
-        )
-        addr_frame.pack(fill="x", padx=24, pady=8)
-
-        addr_inner = ctk.CTkFrame(addr_frame, fg_color="transparent")
-        addr_inner.pack(fill="x", padx=24, pady=24)
-
-        self._domain_label = ctk.CTkLabel(
-            addr_inner,
-            text="---",
-            font=ctk.CTkFont(family=FONT_NUMBER, size=24, weight="bold"),
-            text_color=COLOR_ACCENT_PRIMARY,
-            wraplength=400,
-        )
-        self._domain_label.pack(anchor="center", pady=(0, 16))
-
-        self._copy_btn = ctk.CTkButton(
-            addr_inner,
-            text="アドレスをコピー",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
-            height=40,
-            corner_radius=6,
-            fg_color=COLOR_BG_SURFACE,
-            hover_color="#333333",
-            text_color=COLOR_TEXT_ON_DARK,
-            border_width=1,
-            border_color=COLOR_BORDER,
-            command=self._copy_domain,
-            state="disabled",
-        )
-        self._copy_btn.pack(fill="x")
-
-        # ============================
-        # ステータス表示 (System Tile)
-        # ============================
-        status_frame = ctk.CTkFrame(
-            self, fg_color=COLOR_BG_SURFACE, corner_radius=12,
-            border_width=1, border_color=COLOR_BORDER
-        )
-        status_frame.pack(fill="x", padx=24, pady=8)
-
-        status_inner = ctk.CTkFrame(status_frame, fg_color="transparent")
-        status_inner.pack(fill="x", padx=20, pady=16)
-
-        status_header = ctk.CTkLabel(
-            status_inner,
-            text="ステータス",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
-            text_color=COLOR_TEXT_INK,
-        )
-        status_header.pack(side="left")
-
-        self._status_label = ctk.CTkLabel(
-            status_inner,
-            text=f"●  {STATUS_DISCONNECTED}",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
-            text_color=STATUS_COLORS[STATUS_DISCONNECTED],
-        )
-        self._status_label.pack(side="right")
-
-        # ============================
-        # ログエリア (Carbon Command Layer)
-        # ============================
-        log_frame = ctk.CTkFrame(
-            self, fg_color=COLOR_BG_CARBON, corner_radius=8,
-            border_width=1, border_color=COLOR_BORDER
-        )
-        log_frame.pack(fill="both", expand=True, padx=24, pady=(16, 24))
-
-        log_header = ctk.CTkLabel(
-            log_frame,
-            text="ログ出力",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
-            text_color=COLOR_TEXT_MUTED,
-        )
-        log_header.pack(anchor="w", padx=16, pady=(12, 0))
-
-        self._log_textbox = ctk.CTkTextbox(
-            log_frame,
-            font=ctk.CTkFont(family=FONT_NUMBER, size=12),
-            fg_color=COLOR_BG_CARBON,
-            text_color=COLOR_TEXT_BODY,
-            corner_radius=0,
-            border_width=0,
-            activate_scrollbars=True,
-            state="disabled",
-        )
-        self._log_textbox.pack(fill="both", expand=True, padx=12, pady=(4, 12))
-
-    # =========================================================================
-    # アクションハンドラ
-    # =========================================================================
-
-    def _toggle_connection(self):
-        """起動/停止のトグル処理"""
-        if self._is_connected:
-            self._stop_tunnel()
-        else:
-            self._start_tunnel()
-
-    def _start_tunnel(self):
-        """トンネルを開始する"""
-        port_str = self._port_entry.get().strip()
-        if not port_str:
-            self._show_error("ポート番号を入力してください")
-            return
-
-        try:
-            port = int(port_str)
-        except ValueError:
-            self._show_error("ポート番号は数値で入力してください")
-            return
-
-        if not (1 <= port <= 65535):
-            self._show_error("ポート番号は 1〜65535 の範囲で入力してください")
-            return
-
-        # UI更新
-        self._is_connected = True
-        self._toggle_btn.configure(
-            text="停止する",
-            fg_color=COLOR_ACCENT_RED,
-            hover_color="#444444",
-            text_color=COLOR_TEXT_ON_DARK,
-        )
-        self._port_entry.configure(state="disabled")
-        self._domain_label.configure(text="接続中...")
-        self._copy_btn.configure(state="disabled")
-        self._append_log(f"ポート {port} でトンネルを開始します...")
-
-        # トンネル開始
-        self._tunnel = E4mcTunnel(
-            local_port=port,
-            on_domain_assigned=self._on_domain_assigned_threadsafe,
-            on_status_change=self._on_status_change_threadsafe,
-            on_error=self._on_error_threadsafe,
-            on_log=self._on_log_threadsafe,
-        )
-        self._tunnel.start()
-
-    def _stop_tunnel(self):
-        """トンネルを停止する"""
-        self._append_log("トンネルを停止しています...")
-
-        # UIを即座に '停止中' の表示に切り替え & 画面を強制再描画
-        self._toggle_btn.configure(text="停止中", state="disabled")
-        self._domain_label.configure(text="停止中...")
-        self._update_status(STATUS_DISCONNECTED, STATUS_COLORS[STATUS_DISCONNECTED])
-        self.update_idletasks()
-
-        def do_stop():
-            if self._tunnel:
-                self._tunnel.stop()
-                self._tunnel = None
-
-            self._is_connected = False
-            self._assigned_domain = None
-
-            def finish_stop():
-                self._toggle_btn.configure(
-                    text="起動",
-                    fg_color=COLOR_ACCENT_PRIMARY,
-                    hover_color=COLOR_ACCENT_PRIMARY_HOVER,
-                    text_color="#121212",
-                    state="normal",
-                )
-                self._port_entry.configure(state="normal")
-                self._domain_label.configure(text="---", text_color=COLOR_ACCENT_PRIMARY)
-                self._copy_btn.configure(state="disabled")
-                self._update_status(STATUS_DISCONNECTED, STATUS_COLORS[STATUS_DISCONNECTED])
-                self._append_log("トンネルを停止しました")
-
-            self.after(500, finish_stop)
-
-        threading.Thread(target=do_stop, daemon=True).start()
-
-    def _copy_domain(self):
-        """ドメインをクリップボードにコピーする"""
-        if self._assigned_domain:
-            self.clipboard_clear()
-            self.clipboard_append(self._assigned_domain)
-            original_text = self._copy_btn.cget("text")
-            self._copy_btn.configure(text="✅  コピーしました！")
-            self.after(1500, lambda: self._copy_btn.configure(text=original_text))
-
-    # =========================================================================
-    # スレッドセーフなコールバック
-    # =========================================================================
-
-    def _on_domain_assigned_threadsafe(self, domain: str):
-        self.after(0, self._on_domain_assigned, domain)
-
-    def _on_status_change_threadsafe(self, status: str, color: str):
-        self.after(0, self._update_status, status, color)
-
-    def _on_error_threadsafe(self, message: str):
-        self.after(0, self._show_error, message)
-
-    def _on_log_threadsafe(self, message: str):
-        self.after(0, self._append_log, message)
-
-    # =========================================================================
-    # GUI更新メソッド
-    # =========================================================================
-
-    def _on_domain_assigned(self, domain: str):
-        self._assigned_domain = domain
-        self._domain_label.configure(text=domain, text_color=COLOR_ACCENT_PRIMARY)
-        self._copy_btn.configure(state="normal")
-
-    def _update_status(self, status: str, color: str):
-        self._status_label.configure(
-            text=f"●  {status}",
-            text_color=color,
-        )
-
-        if status in (STATUS_ERROR, STATUS_DISCONNECTED) and self._is_connected:
-            if status == STATUS_ERROR:
-                self._is_connected = False
-                self._toggle_btn.configure(
-                    text="起動",
-                    fg_color=COLOR_ACCENT_PRIMARY,
-                    hover_color=COLOR_ACCENT_PRIMARY_HOVER,
-                    text_color="#121212",
-                )
-                self._port_entry.configure(state="normal")
-                self._copy_btn.configure(state="disabled")
-                self._domain_label.configure(text="---")
-                if self._tunnel:
-                    threading.Thread(
-                        target=self._tunnel.stop, daemon=True
-                    ).start()
-                    self._tunnel = None
-
-    def _show_error(self, message: str):
-        self._append_log(f"❌ エラー: {message}")
-
-    def _append_log(self, message: str):
-        self._log_textbox.configure(state="normal")
-        self._log_textbox.insert("end", f"{message}\n")
-        self._log_textbox.see("end")
-        self._log_textbox.configure(state="disabled")
-
-    # =========================================================================
-    # クリーンアップ
-    # =========================================================================
-
-    def _on_closing(self):
-        self._force_cleanup()
-        self.destroy()
-
-    def _force_cleanup(self):
-        if self._tunnel:
+    async def broadcast(self, message: dict):
+        disconnected = []
+        for connection in self.active_connections:
             try:
-                self._tunnel.stop()
+                await connection.send_json(message)
+            except Exception:
+                disconnected.append(connection)
+        for conn in disconnected:
+            self.disconnect(conn)
+
+    def _safe_broadcast(self, message: dict):
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.broadcast(message), loop)
+        except Exception as e:
+            logger.debug(f"ブロードキャスト例外: {e}")
+
+    # コールバック群
+    def on_status_change(self, status: str, color: str):
+        self.status = status
+        self.status_color = color
+        if status in (STATUS_ONLINE, STATUS_CONNECTING):
+            self.is_connected = True
+        elif status in (STATUS_DISCONNECTED, STATUS_ERROR):
+            self.is_connected = False
+            self.current_port = None
+            if status == STATUS_DISCONNECTED:
+                self.domain = None
+        self._safe_broadcast({
+            "type": "status_change",
+            "payload": {"status": status, "color": color}
+        })
+
+    def on_domain_assigned(self, domain: str):
+        self.domain = domain
+        self._safe_broadcast({
+            "type": "domain_assigned",
+            "payload": {"domain": domain}
+        })
+
+    def on_error(self, message: str):
+        self.append_log(f"❌ エラー: {message}")
+
+    def on_log(self, message: str):
+        self.append_log(message)
+
+    def append_log(self, message: str):
+        self.logs.append(message)
+        # ログ保持上限 (最新500件)
+        if len(self.logs) > 500:
+            self.logs = self.logs[-500:]
+        self._safe_broadcast({
+            "type": "log",
+            "payload": {"message": message}
+        })
+
+    def start_tunnel(self, port: int):
+        if self.is_connected and self.tunnel:
+            return False, "すでにトンネルが起動しています"
+
+        self.current_port = port
+        self.is_connected = True
+        self.append_log(f"ポート {port} でトンネルを開始します...")
+
+        self.tunnel = E4mcTunnel(
+            local_port=port,
+            on_domain_assigned=self.on_domain_assigned,
+            on_status_change=self.on_status_change,
+            on_error=self.on_error,
+            on_log=self.on_log,
+        )
+        self.tunnel.start()
+        return True, "トンネルを開始しました"
+
+    def stop_tunnel(self):
+        self.append_log("トンネルを停止しています...")
+        if self.tunnel:
+            def do_stop():
+                if self.tunnel:
+                    self.tunnel.stop()
+                    self.tunnel = None
+                self.is_connected = False
+                self.current_port = None
+                self.domain = None
+                self.on_status_change(STATUS_DISCONNECTED, STATUS_COLORS[STATUS_DISCONNECTED])
+                self.append_log("トンネルを停止しました")
+            
+            threading.Thread(target=do_stop, daemon=True).start()
+        else:
+            self.is_connected = False
+            self.current_port = None
+            self.domain = None
+            self.on_status_change(STATUS_DISCONNECTED, STATUS_COLORS[STATUS_DISCONNECTED])
+            self.append_log("トンネルを停止しました")
+        return True, "トンネル停止処理を開始しました"
+
+
+# FastAPI アプリケーションの作成
+app = FastAPI(title="AhiruServer Web")
+manager = WebAppManager()
+
+# Cloudflareおよび外部オリジン対応のCORS設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_private_network=True,
+)
+
+# Private Network Access (PNA) 対応ミドルウェア (ブラウザのローカルネットワーク保護仕様に対応)
+@app.middleware("http")
+async def add_private_network_headers(request: Request, call_next):
+    # OPTIONSプリフライトリクエストに対するPNAヘッダー
+    if request.method == "OPTIONS":
+        response = Response(status_code=204)
+        origin = request.headers.get("origin", "*")
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        if "access-control-request-private-network" in request.headers:
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+        return response
+
+    response = await call_next(request)
+    # レスポンスヘッダーにPNA許可を追加
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
+# 静的ファイルの配信
+static_dir = resource_path("static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+@app.get("/")
+async def get_index():
+    index_path = resource_path(os.path.join("static", "index.html"))
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return JSONResponse({"error": "index.htmlが見つかりません"}, status_code=404)
+
+@app.get("/style.css")
+async def get_style():
+    path = resource_path(os.path.join("static", "style.css"))
+    if os.path.exists(path):
+        return FileResponse(path, media_type="text/css")
+    return JSONResponse({"error": "style.cssが見つかりません"}, status_code=404)
+
+@app.get("/app.js")
+async def get_app_js():
+    path = resource_path(os.path.join("static", "app.js"))
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse({"error": "app.jsが見つかりません"}, status_code=404)
+
+@app.get("/logo.png")
+async def get_logo():
+    path = resource_path(os.path.join("static", "logo.png"))
+    if os.path.exists(path):
+        return FileResponse(path, media_type="image/png")
+    return JSONResponse({"error": "logo.pngが見つかりません"}, status_code=404)
+
+class StartRequest(BaseModel):
+    port: int
+
+@app.post("/api/start")
+async def api_start(req: StartRequest):
+    if not (1 <= req.port <= 65535):
+        return {"success": False, "message": "ポート番号は 1〜65535 の範囲で指定してください"}
+    success, msg = manager.start_tunnel(req.port)
+    return {"success": success, "message": msg}
+
+@app.post("/api/stop")
+async def api_stop():
+    success, msg = manager.stop_tunnel()
+    return {"success": success, "message": msg}
+
+@app.get("/api/status")
+async def api_status():
+    return {
+        "is_connected": manager.is_connected,
+        "status": manager.status,
+        "color": manager.status_color,
+        "domain": manager.domain,
+        "port": manager.current_port,
+        "logs": manager.logs
+    }
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # WebSocket経由の受信およびハートビート（Ping/Pong）処理
+            # Cloudflareの100秒タイムアウト切断を防止
+            data_text = await websocket.receive_text()
+            try:
+                msg = json.loads(data_text)
+                if isinstance(msg, dict) and msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong", "payload": {"timestamp": msg.get("payload", {}).get("timestamp", 0)}})
             except Exception:
                 pass
-            self._tunnel = None
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception:
+        manager.disconnect(websocket)
 
 
-# =============================================================================
-# エントリーポイント
-# =============================================================================
+def open_browser(url: str):
+    """ サーバー起動後にブラウザを自動オープンする """
+    webbrowser.open(url)
+
+
+def cleanup_on_exit():
+    """ 終了時のクリーンアップ """
+    if manager.tunnel:
+        try:
+            manager.tunnel.stop()
+        except Exception:
+            pass
+
+
+atexit.register(cleanup_on_exit)
 
 if __name__ == "__main__":
-    app = App()
-    app.mainloop()
+    host = os.environ.get("AHIRU_HOST", "0.0.0.0")
+    port = int(os.environ.get("AHIRU_PORT", "8000"))
+    local_display_url = f"http://127.0.0.1:{port}"
+
+    print("=" * 60)
+    print("AhiruServer Web Application (Cloudflare Ready)")
+    print(f"サーバーを起動しています: http://{host}:{port}")
+    print(f"ローカルアクセスURL: {local_display_url}")
+    print("Cloudflare Tunnel / リバースプロキシでの外部公開に対応")
+    print("=" * 60)
+    
+    # 1.5秒後にブラウザを自動起動 (ローカルURL)
+    threading.Timer(1.5, lambda: open_browser(local_display_url)).start()
+    
+    # Uvicornサーバーの起動 (Cloudflare等のプロキシヘッダーを信頼)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*"
+    )

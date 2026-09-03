@@ -746,6 +746,27 @@ async def get_index():
         return FileResponse(index_path)
     return JSONResponse({"error": "index.htmlが見つかりません"}, status_code=404)
 
+@app.get("/style.css")
+async def get_style():
+    path = resource_path(os.path.join("static", "style.css"))
+    if os.path.exists(path):
+        return FileResponse(path, media_type="text/css")
+    return JSONResponse({"error": "style.cssが見つかりません"}, status_code=404)
+
+@app.get("/app.js")
+async def get_app_js():
+    path = resource_path(os.path.join("static", "app.js"))
+    if os.path.exists(path):
+        return FileResponse(path, media_type="application/javascript")
+    return JSONResponse({"error": "app.jsが見つかりません"}, status_code=404)
+
+@app.get("/logo.png")
+async def get_logo():
+    path = resource_path(os.path.join("static", "logo.png"))
+    if os.path.exists(path):
+        return FileResponse(path, media_type="image/png")
+    return JSONResponse({"error": "logo.pngが見つかりません"}, status_code=404)
+
 class StartRequest(BaseModel):
     port: int
 

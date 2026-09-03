@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AhiruServer - Minecraft LAN共有</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- ヘッダー (Hero Panel) -->
+    <header class="header-panel">
+      <div class="header-content">
+        <div class="title-box">
+          <div class="logo-container">
+            <img src="logo.png" alt="AhiruServer Logo" class="logo-img">
+            <div class="logo-text">
+              <h1 class="title">AhiruServer</h1>
+              <p class="subtitle">Minecraft LAN共有 — Duck Speed Tunnel</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </header>
+
+    <!-- メインコンテンツ -->
+    <main class="main-content">
+      <!-- ポート入力エリア -->
+      <div class="form-panel">
+        <label for="port-input" class="form-label">LANポート番号</label>
+        <input 
+          type="number" 
+          id="port-input" 
+          name="port_input_no_autofill"
+          class="port-input" 
+          placeholder="ポート番号を入力 (例: 25565)" 
+          value=""
+          min="1" 
+          max="65535" 
+          autocomplete="new-password"
+        >
+      </div>
+
+      <!-- 起動/停止ボタン -->
+      <button id="toggle-btn" class="toggle-btn">起動</button>
+
+      <!-- 共有アドレス表示エリア -->
+      <div class="info-card">
+        <div class="domain-display" id="domain-display">---</div>
+        <button id="copy-btn" class="copy-btn" disabled>アドレスをコピー</button>
+      </div>
+
+      <!-- ステータス表示エリア -->
+      <div class="status-card">
+        <span class="status-header">ステータス</span>
+        <div class="status-indicator" id="status-indicator">
+          <span class="status-dot" id="status-dot">●</span>
+          <span class="status-text" id="status-text">停止中</span>
+        </div>
+      </div>
+
+      <!-- ログエリア (Carbon Command Layer) -->
+      <div class="log-card">
+        <div class="log-header">ログ出力</div>
+        <div class="log-terminal" id="log-terminal"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

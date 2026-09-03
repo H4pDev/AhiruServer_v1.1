@@ -10,7 +10,7 @@ pip install pyinstaller --quiet
 
 # 2. Build AhiruServer.exe
 Write-Host "[2/4] Building AhiruServer.exe..." -ForegroundColor Yellow
-python -m PyInstaller --noconfirm --onefile --windowed --add-data "assets;assets" --name AhiruServer main.py
+python -m PyInstaller --noconfirm --onefile --windowed --add-data "assets;assets" --add-data "static;static" --name AhiruServer main.py
 
 if (-not (Test-Path "dist/AhiruServer.exe")) {
     Write-Error "Failed to build dist/AhiruServer.exe"
