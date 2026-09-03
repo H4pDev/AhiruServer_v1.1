@@ -41,9 +41,10 @@ if hasattr(sys.stderr, 'reconfigure'):
     except Exception:
         pass
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
@@ -703,6 +704,36 @@ class WebAppManager:
 app = FastAPI(title="AhiruServer Web")
 manager = WebAppManager()
 
+# Cloudflareおよび外部オリジン対応のCORS設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_private_network=True,
+)
+
+# Private Network Access (PNA) 対応ミドルウェア (ブラウザのローカルネットワーク保護仕様に対応)
+@app.middleware("http")
+async def add_private_network_headers(request: Request, call_next):
+    # OPTIONSプリフライトリクエストに対するPNAヘッダー
+    if request.method == "OPTIONS":
+        response = Response(status_code=204)
+        origin = request.headers.get("origin", "*")
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS, PUT, DELETE"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        if "access-control-request-private-network" in request.headers:
+            response.headers["Access-Control-Allow-Private-Network"] = "true"
+        return response
+
+    response = await call_next(request)
+    # レスポンスヘッダーにPNA許可を追加
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
 # 静的ファイルの配信
 static_dir = resource_path("static")
 if os.path.exists(static_dir):
@@ -746,17 +777,24 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # WebSocket経由の受信は心拍確認等に使用
-            await websocket.receive_text()
+            # WebSocket経由の受信およびハートビート（Ping/Pong）処理
+            # Cloudflareの100秒タイムアウト切断を防止
+            data_text = await websocket.receive_text()
+            try:
+                msg = json.loads(data_text)
+                if isinstance(msg, dict) and msg.get("type") == "ping":
+                    await websocket.send_json({"type": "pong", "payload": {"timestamp": msg.get("payload", {}).get("timestamp", 0)}})
+            except Exception:
+                pass
     except WebSocketDisconnect:
         manager.disconnect(websocket)
     except Exception:
         manager.disconnect(websocket)
 
 
-def open_browser():
+def open_browser(url: str):
     """ サーバー起動後にブラウザを自動オープンする """
-    webbrowser.open("http://127.0.0.1:8000")
+    webbrowser.open(url)
 
 
 def cleanup_on_exit():
@@ -771,13 +809,26 @@ def cleanup_on_exit():
 atexit.register(cleanup_on_exit)
 
 if __name__ == "__main__":
+    host = os.environ.get("AHIRU_HOST", "0.0.0.0")
+    port = int(os.environ.get("AHIRU_PORT", "8000"))
+    local_display_url = f"http://127.0.0.1:{port}"
+
     print("=" * 60)
-    print("AhiruServer Web Application")
-    print("Webサーバーを起動しています: http://127.0.0.1:8000")
+    print("AhiruServer Web Application (Cloudflare Ready)")
+    print(f"サーバーを起動しています: http://{host}:{port}")
+    print(f"ローカルアクセスURL: {local_display_url}")
+    print("Cloudflare Tunnel / リバースプロキシでの外部公開に対応")
     print("=" * 60)
     
-    # 1.5秒後にブラウザを自動起動
-    threading.Timer(1.5, open_browser).start()
+    # 1.5秒後にブラウザを自動起動 (ローカルURL)
+    threading.Timer(1.5, lambda: open_browser(local_display_url)).start()
     
-    # Uvicornサーバーの起動
-    uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+    # Uvicornサーバーの起動 (Cloudflare等のプロキシヘッダーを信頼)
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        log_level="info",
+        proxy_headers=True,
+        forwarded_allow_ips="*"
+    )

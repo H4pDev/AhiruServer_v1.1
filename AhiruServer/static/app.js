@@ -11,6 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let isConnected = false;
   let assignedDomain = null;
   let ws = null;
+  let pingInterval = null;
+  let reconnectDelay = 1000;
 
   // 初期読み込み時は必ずポート番号入力欄を空欄にする
   portInput.value = '';
@@ -26,20 +28,58 @@ document.addEventListener('DOMContentLoaded', () => {
     "エラー": "#E74C3C"
   };
 
+  // APIおよびWebSocketのベースURL解決
+  // Cloudflare Pagesや外部から静的ファイルのみホストされるケースに対応
+  const urlParams = new URLSearchParams(window.location.search);
+  const customApiBase = urlParams.get('api') || localStorage.getItem('ahiru_api_base') || '';
+  const apiBase = customApiBase.replace(/\/+$/, '');
+
+  function getWsUrl() {
+    if (apiBase) {
+      const wsProto = apiBase.startsWith('https:') ? 'wss:' : 'ws:';
+      const hostPart = apiBase.replace(/^https?:\/\//, '');
+      return `${wsProto}//${hostPart}/ws`;
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/ws`;
+  }
+
   // WebSocket接続の初期化
   function initWebSocket() {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+      return;
+    }
 
-    ws = new WebSocket(wsUrl);
+    const wsUrl = getWsUrl();
+    console.log(`[AhiruServer] WebSocket接続試行: ${wsUrl}`);
+
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (err) {
+      console.error('WebSocket作成失敗:', err);
+      scheduleReconnect();
+      return;
+    }
 
     ws.onopen = () => {
       console.log('WebSocket 接続成功');
+      reconnectDelay = 1000;
+      // Cloudflareの100秒アイドル切断を防ぐための25秒ハートビートPing
+      if (pingInterval) clearInterval(pingInterval);
+      pingInterval = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping', payload: { timestamp: Date.now() } }));
+        }
+      }, 25000);
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        if (data.type === 'pong') {
+          // ハートビート応答
+          return;
+        }
         handleWsMessage(data);
       } catch (e) {
         console.error('メッセージ解析エラー:', e);
@@ -47,13 +87,21 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     ws.onclose = () => {
-      console.warn('WebSocket 切断。2秒後に再接続を試みます...');
-      setTimeout(initWebSocket, 2000);
+      if (pingInterval) clearInterval(pingInterval);
+      console.warn(`WebSocket 切断。${reconnectDelay / 1000}秒後に再接続を試みます...`);
+      scheduleReconnect();
     };
 
     ws.onerror = (err) => {
       console.error('WebSocket エラー:', err);
     };
+  }
+
+  function scheduleReconnect() {
+    setTimeout(() => {
+      initWebSocket();
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
+    }, reconnectDelay);
   }
 
   // 受信メッセージの処理
@@ -137,7 +185,7 @@ document.addEventListener('DOMContentLoaded', () => {
       toggleBtn.disabled = true;
       toggleBtn.textContent = '停止中...';
       try {
-        const resp = await fetch('/api/stop', { method: 'POST' });
+        const resp = await fetch(`${apiBase}/api/stop`, { method: 'POST' });
         const res = await resp.json();
         if (!res.success) {
           alert(`エラー: ${res.message}`);
@@ -145,6 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch (e) {
         console.error('停止リクエストエラー:', e);
+        alert(`停止リクエストに失敗しました。\n詳細: ${e.message}\n(サーバーが起動していないか、セキュリティ制限により通信がブロックされた可能性があります)`);
         toggleBtn.disabled = false;
       }
     } else {
@@ -164,7 +213,7 @@ document.addEventListener('DOMContentLoaded', () => {
       toggleBtn.textContent = '起動中...';
 
       try {
-        const resp = await fetch('/api/start', {
+        const resp = await fetch(`${apiBase}/api/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ port })
@@ -180,6 +229,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } catch (e) {
         console.error('起動リクエストエラー:', e);
+        alert(`起動リクエストに失敗しました。\n詳細: ${e.message}\n(サーバーが起動していないか、ブラウザのセキュリティ制限(Mixed Content / PNA)により遮断された可能性があります)`);
         toggleBtn.disabled = false;
         toggleBtn.textContent = '起動';
       }
