@@ -20,34 +20,11 @@
             </div>
           </div>
         </div>
-        <button id="backend-toggle-btn" class="backend-toggle-btn" type="button" title="バックエンド接続設定">接続設定</button>
       </div>
     </header>
 
     <!-- メインコンテンツ -->
     <main class="main-content">
-      <!-- バックエンド接続設定パネル (Cloudflare Pages等の外部公開用) -->
-      <section id="backend-panel" class="backend-panel hidden">
-        <div class="backend-panel-header">
-          <span class="backend-panel-title">バックエンド接続先 (Cloudflare / ローカル)</span>
-          <span id="backend-conn-badge" class="backend-conn-badge">未接続</span>
-        </div>
-        <p class="backend-help">
-          Cloudflare Pages 等から利用する場合は、起動中のローカルサーバー (<code>http://127.0.0.1:8000</code>) または Cloudflare Tunnel URL (<code>https://*.trycloudflare.com</code>) を指定してください。
-        </p>
-        <div class="backend-input-row">
-          <input
-            type="url"
-            id="api-base-input"
-            class="backend-input"
-            placeholder="http://127.0.0.1:8000"
-            autocomplete="off"
-          >
-          <button id="api-save-btn" class="backend-save-btn" type="button">接続</button>
-          <button id="api-reset-btn" class="backend-reset-btn" type="button" title="同一オリジンに戻す">解除</button>
-        </div>
-      </section>
-
       <!-- ポート入力エリア -->
       <div class="form-panel">
         <label for="port-input" class="form-label">LANポート番号</label>

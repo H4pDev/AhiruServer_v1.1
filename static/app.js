@@ -7,12 +7,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusDot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
   const logTerminal = document.getElementById('log-terminal');
-  const backendToggleBtn = document.getElementById('backend-toggle-btn');
-  const backendPanel = document.getElementById('backend-panel');
-  const backendConnBadge = document.getElementById('backend-conn-badge');
-  const apiBaseInput = document.getElementById('api-base-input');
-  const apiSaveBtn = document.getElementById('api-save-btn');
-  const apiResetBtn = document.getElementById('api-reset-btn');
 
   let isConnected = false;
   let assignedDomain = null;
@@ -20,7 +14,6 @@ document.addEventListener('DOMContentLoaded', () => {
   let pingInterval = null;
   let reconnectTimer = null;
   let reconnectDelay = 1000;
-  let wsFailCount = 0;
 
   // 初期読み込み時は必ずポート番号入力欄を空欄にする
   portInput.value = '';
@@ -37,7 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // APIおよびWebSocketのベースURL解決
-  // Cloudflare Pagesや外部から静的ファイルのみホストされるケースに対応
+  // Cloudflare Pages等の静的ホスティング時は自動でローカルサーバー (127.0.0.1:8000) へ接続
   const urlParams = new URLSearchParams(window.location.search);
   const queryApi = urlParams.get('api');
   if (queryApi) {
@@ -45,66 +38,8 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const isStaticHost = window.location.hostname.endsWith('.pages.dev') || window.location.protocol === 'file:';
-  let apiBase = (localStorage.getItem('ahiru_api_base') || '').replace(/\/+$/, '');
-  if (!apiBase && isStaticHost) {
-    apiBase = 'http://127.0.0.1:8000';
-    backendPanel.classList.remove('hidden');
-  }
-  apiBaseInput.value = apiBase;
-
-  function setBackendBadge(state, text) {
-    backendConnBadge.textContent = text;
-    backendConnBadge.classList.remove('connected', 'error');
-    if (state === 'connected') backendConnBadge.classList.add('connected');
-    if (state === 'error') backendConnBadge.classList.add('error');
-  }
-
-  backendToggleBtn.addEventListener('click', () => {
-    backendPanel.classList.toggle('hidden');
-  });
-
-  apiSaveBtn.addEventListener('click', () => {
-    let val = apiBaseInput.value.trim().replace(/\/+$/, '');
-    if (val && !/^https?:\/\//i.test(val)) {
-      val = `http://${val}`;
-    }
-    apiBase = val;
-    apiBaseInput.value = apiBase;
-    if (apiBase) {
-      localStorage.setItem('ahiru_api_base', apiBase);
-    } else {
-      localStorage.removeItem('ahiru_api_base');
-    }
-    reconnectToBackend();
-  });
-
-  apiResetBtn.addEventListener('click', () => {
-    localStorage.removeItem('ahiru_api_base');
-    apiBase = '';
-    apiBaseInput.value = '';
-    reconnectToBackend();
-  });
-
-  function reconnectToBackend() {
-    wsFailCount = 0;
-    reconnectDelay = 1000;
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (pingInterval) {
-      clearInterval(pingInterval);
-      pingInterval = null;
-    }
-    if (ws) {
-      ws.onclose = null;
-      ws.onerror = null;
-      ws.close();
-      ws = null;
-    }
-    setBackendBadge('idle', '接続中...');
-    initWebSocket();
-  }
+  const savedApi = localStorage.getItem('ahiru_api_base') || '';
+  const apiBase = (queryApi || savedApi || (isStaticHost ? 'http://127.0.0.1:8000' : '')).replace(/\/+$/, '');
 
   function getWsUrl() {
     if (apiBase) {
@@ -129,17 +64,13 @@ document.addEventListener('DOMContentLoaded', () => {
       ws = new WebSocket(wsUrl);
     } catch (err) {
       console.error('WebSocket作成失敗:', err);
-      setBackendBadge('error', 'URL形式エラー');
-      backendPanel.classList.remove('hidden');
       scheduleReconnect();
       return;
     }
 
     ws.onopen = () => {
       console.log('WebSocket 接続成功');
-      wsFailCount = 0;
       reconnectDelay = 1000;
-      setBackendBadge('connected', '接続済み');
       // Cloudflareの100秒アイドル切断を防ぐための25秒ハートビートPing
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
@@ -164,11 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     ws.onclose = () => {
       if (pingInterval) clearInterval(pingInterval);
-      wsFailCount += 1;
-      setBackendBadge('error', '未接続');
-      // 外部ホスティング等で接続できない場合は設定パネルを自動表示
-      if (wsFailCount >= 2) {
-        backendPanel.classList.remove('hidden');
+      if (isStaticHost || apiBase) {
+        updateStatus('ローカルサーバー未起動（PC側で run.bat を起動してください）', '#E74C3C');
       }
       console.warn(`WebSocket 切断。${reconnectDelay / 1000}秒後に再接続を試みます...`);
       scheduleReconnect();
@@ -176,7 +104,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     ws.onerror = (err) => {
       console.error('WebSocket エラー:', err);
-      setBackendBadge('error', '接続失敗');
     };
   }
 
@@ -262,6 +189,24 @@ document.addEventListener('DOMContentLoaded', () => {
     logTerminal.scrollTop = logTerminal.scrollHeight;
   }
 
+  // API POSTリクエストの共通ヘルパー（非200応答や空レスポンスによるJSONパースエラーを防止）
+  async function postApi(path, body = null) {
+    const options = { method: 'POST' };
+    if (body !== null) {
+      options.headers = { 'Content-Type': 'application/json' };
+      options.body = JSON.stringify(body);
+    }
+    const resp = await fetch(`${apiBase}${path}`, options);
+    const text = await resp.text();
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status} (${resp.statusText || '通信エラー'})`);
+    }
+    if (!text) {
+      throw new Error('サーバーから空の応答が返されました');
+    }
+    return JSON.parse(text);
+  }
+
   // 起動/停止トグル処理
   toggleBtn.addEventListener('click', async () => {
     if (isConnected) {
@@ -269,8 +214,7 @@ document.addEventListener('DOMContentLoaded', () => {
       toggleBtn.disabled = true;
       toggleBtn.textContent = '停止中...';
       try {
-        const resp = await fetch(`${apiBase}/api/stop`, { method: 'POST' });
-        const res = await resp.json();
+        const res = await postApi('/api/stop');
         if (!res.success) {
           alert(`エラー: ${res.message}`);
           toggleBtn.disabled = false;
@@ -297,12 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
       toggleBtn.textContent = '起動中...';
 
       try {
-        const resp = await fetch(`${apiBase}/api/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ port })
-        });
-        const res = await resp.json();
+        const res = await postApi('/api/start', { port });
         if (!res.success) {
           alert(`エラー: ${res.message}`);
           toggleBtn.disabled = false;
