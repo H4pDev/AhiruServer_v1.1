@@ -7,12 +7,20 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusDot = document.getElementById('status-dot');
   const statusText = document.getElementById('status-text');
   const logTerminal = document.getElementById('log-terminal');
+  const backendToggleBtn = document.getElementById('backend-toggle-btn');
+  const backendPanel = document.getElementById('backend-panel');
+  const backendConnBadge = document.getElementById('backend-conn-badge');
+  const apiBaseInput = document.getElementById('api-base-input');
+  const apiSaveBtn = document.getElementById('api-save-btn');
+  const apiResetBtn = document.getElementById('api-reset-btn');
 
   let isConnected = false;
   let assignedDomain = null;
   let ws = null;
   let pingInterval = null;
+  let reconnectTimer = null;
   let reconnectDelay = 1000;
+  let wsFailCount = 0;
 
   // 初期読み込み時は必ずポート番号入力欄を空欄にする
   portInput.value = '';
@@ -31,8 +39,72 @@ document.addEventListener('DOMContentLoaded', () => {
   // APIおよびWebSocketのベースURL解決
   // Cloudflare Pagesや外部から静的ファイルのみホストされるケースに対応
   const urlParams = new URLSearchParams(window.location.search);
-  const customApiBase = urlParams.get('api') || localStorage.getItem('ahiru_api_base') || '';
-  const apiBase = customApiBase.replace(/\/+$/, '');
+  const queryApi = urlParams.get('api');
+  if (queryApi) {
+    localStorage.setItem('ahiru_api_base', queryApi.trim().replace(/\/+$/, ''));
+  }
+
+  const isStaticHost = window.location.hostname.endsWith('.pages.dev') || window.location.protocol === 'file:';
+  let apiBase = (localStorage.getItem('ahiru_api_base') || '').replace(/\/+$/, '');
+  if (!apiBase && isStaticHost) {
+    apiBase = 'http://127.0.0.1:8000';
+    backendPanel.classList.remove('hidden');
+  }
+  apiBaseInput.value = apiBase;
+
+  function setBackendBadge(state, text) {
+    backendConnBadge.textContent = text;
+    backendConnBadge.classList.remove('connected', 'error');
+    if (state === 'connected') backendConnBadge.classList.add('connected');
+    if (state === 'error') backendConnBadge.classList.add('error');
+  }
+
+  backendToggleBtn.addEventListener('click', () => {
+    backendPanel.classList.toggle('hidden');
+  });
+
+  apiSaveBtn.addEventListener('click', () => {
+    let val = apiBaseInput.value.trim().replace(/\/+$/, '');
+    if (val && !/^https?:\/\//i.test(val)) {
+      val = `http://${val}`;
+    }
+    apiBase = val;
+    apiBaseInput.value = apiBase;
+    if (apiBase) {
+      localStorage.setItem('ahiru_api_base', apiBase);
+    } else {
+      localStorage.removeItem('ahiru_api_base');
+    }
+    reconnectToBackend();
+  });
+
+  apiResetBtn.addEventListener('click', () => {
+    localStorage.removeItem('ahiru_api_base');
+    apiBase = '';
+    apiBaseInput.value = '';
+    reconnectToBackend();
+  });
+
+  function reconnectToBackend() {
+    wsFailCount = 0;
+    reconnectDelay = 1000;
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (pingInterval) {
+      clearInterval(pingInterval);
+      pingInterval = null;
+    }
+    if (ws) {
+      ws.onclose = null;
+      ws.onerror = null;
+      ws.close();
+      ws = null;
+    }
+    setBackendBadge('idle', '接続中...');
+    initWebSocket();
+  }
 
   function getWsUrl() {
     if (apiBase) {
@@ -57,13 +129,17 @@ document.addEventListener('DOMContentLoaded', () => {
       ws = new WebSocket(wsUrl);
     } catch (err) {
       console.error('WebSocket作成失敗:', err);
+      setBackendBadge('error', 'URL形式エラー');
+      backendPanel.classList.remove('hidden');
       scheduleReconnect();
       return;
     }
 
     ws.onopen = () => {
       console.log('WebSocket 接続成功');
+      wsFailCount = 0;
       reconnectDelay = 1000;
+      setBackendBadge('connected', '接続済み');
       // Cloudflareの100秒アイドル切断を防ぐための25秒ハートビートPing
       if (pingInterval) clearInterval(pingInterval);
       pingInterval = setInterval(() => {
@@ -88,17 +164,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     ws.onclose = () => {
       if (pingInterval) clearInterval(pingInterval);
+      wsFailCount += 1;
+      setBackendBadge('error', '未接続');
+      // 外部ホスティング等で接続できない場合は設定パネルを自動表示
+      if (wsFailCount >= 2) {
+        backendPanel.classList.remove('hidden');
+      }
       console.warn(`WebSocket 切断。${reconnectDelay / 1000}秒後に再接続を試みます...`);
       scheduleReconnect();
     };
 
     ws.onerror = (err) => {
       console.error('WebSocket エラー:', err);
+      setBackendBadge('error', '接続失敗');
     };
   }
 
   function scheduleReconnect() {
-    setTimeout(() => {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
       initWebSocket();
       reconnectDelay = Math.min(reconnectDelay * 1.5, 10000);
     }, reconnectDelay);

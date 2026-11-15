@@ -11,17 +11,35 @@ echo.
 
 cd /d "%~dp0"
 
-:: 1. Python環境チェック
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo [エラー] Pythonが見つかりません。Pythonがインストールされているか確認してください。
+:: 1. Python環境チェック (.venv優先)
+set "PY_CMD="
+if exist ".venv\Scripts\python.exe" (
+    set "PY_CMD=.venv\Scripts\python.exe"
+) else (
+    python -c "import sys" >nul 2>&1
+    if not errorlevel 1 (
+        set "PY_CMD=python"
+    ) else (
+        py -3 -c "import sys" >nul 2>&1
+        if not errorlevel 1 (
+            set "PY_CMD=py -3"
+        )
+    )
+)
+
+if not defined PY_CMD (
+    echo [エラー] Pythonが見つかりません。先に setup.bat を実行するか、Pythonをインストールしてください。
     pause
     exit /b 1
 )
 
-:: 2. 依存パッケージのチェック
-echo [1/3] 依存関係を確認中...
-pip install -r requirements.txt --quiet
+:: 2. 依存パッケージのチェック (.venv未構築時のみ)
+if not exist ".venv\Scripts\python.exe" (
+    echo [1/3] 依存関係を確認中...
+    %PY_CMD% -m pip install -r requirements.txt --quiet
+) else (
+    echo [1/3] 仮想環境 ^(.venv^) を使用します。
+)
 
 :: 3. cloudflared の準備
 echo [2/3] Cloudflare Tunnel (cloudflared) を確認中...
@@ -45,7 +63,7 @@ if errorlevel 1 (
 
 :: 4. AhiruServer バックエンドの起動 (バックグラウンド)
 echo [3/3] AhiruServer を起動中 (ポート 8000)...
-start /b python main.py
+start /b %PY_CMD% main.py
 
 timeout /t 2 /nobreak >nul
 

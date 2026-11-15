@@ -326,3 +326,137 @@ body {
 .log-terminal::-webkit-scrollbar-thumb:hover {
   background: #3b445c;
 }
+
+/* バックエンド接続設定UI (Cloudflare Pages対応) */
+.hidden {
+  display: none !important;
+}
+
+.backend-toggle-btn {
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-family);
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.2s, border-color 0.2s, background-color 0.2s;
+}
+
+.backend-toggle-btn:hover {
+  color: var(--color-text-ink);
+  border-color: var(--color-accent-primary);
+}
+
+.backend-panel {
+  background-color: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.backend-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.backend-panel-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--color-text-ink);
+}
+
+.backend-conn-badge {
+  font-size: 11px;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background-color: var(--color-bg-surface);
+  color: var(--status-disconnected);
+  border: 1px solid var(--color-border);
+}
+
+.backend-conn-badge.connected {
+  color: var(--status-online);
+  border-color: rgba(46, 204, 113, 0.4);
+}
+
+.backend-conn-badge.error {
+  color: var(--status-error);
+  border-color: rgba(231, 76, 60, 0.4);
+}
+
+.backend-help {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-soft);
+}
+
+.backend-help code {
+  background-color: var(--color-bg-carbon);
+  color: var(--color-text-ink);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--font-number);
+}
+
+.backend-input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.backend-input {
+  flex: 1;
+  height: 36px;
+  background-color: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0 10px;
+  color: var(--color-text-body);
+  font-family: var(--font-number);
+  font-size: 13px;
+  outline: none;
+}
+
+.backend-input:focus {
+  border-color: var(--color-accent-primary);
+}
+
+.backend-save-btn,
+.backend-reset-btn {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-family: var(--font-family);
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+}
+
+.backend-save-btn {
+  background-color: var(--color-accent-primary);
+  color: #121212;
+  border-color: var(--color-accent-primary);
+}
+
+.backend-save-btn:hover {
+  background-color: var(--color-accent-primary-hover);
+}
+
+.backend-reset-btn {
+  background-color: var(--color-bg-surface);
+  color: var(--color-text-soft);
+}
+
+.backend-reset-btn:hover {
+  color: var(--color-text-on-dark);
+}
